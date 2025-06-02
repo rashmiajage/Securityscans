@@ -1,1 +1,59 @@
 
+@Service
+public class ChainedApiService {
+
+    private final WebClient webClient;
+
+    public ChainedApiService(WebClient.Builder builder) {
+        this.webClient = builder.build();
+    }
+
+    public Mono<Map<String, List<UserProfile>>> getUsersGroupedByDepartment(List<MyInput> inputs) {
+        List<Mono<Map<String, List<UserProfile>>>> tasks = inputs.stream()
+                .map(input -> fetchUsersForDepartment(input.getIndex(), input.getDepartment()))
+                .collect(Collectors.toList());
+
+        return Flux.merge(tasks)
+                .reduce(new HashMap<>(), (acc, map) -> {
+                    map.forEach((dept, users) ->
+                        acc.merge(dept, users, (oldList, newList) -> {
+                            oldList.addAll(newList);
+                            return oldList;
+                        })
+                    );
+                    return acc;
+                });
+    }
+
+    private Mono<Map<String, List<UserProfile>>> fetchUsersForDepartment(String index, String department) {
+        Map<String, Object> apiARequest = Map.of(
+                "index", index,
+                "type", "basic",
+                "Department", department
+        );
+
+        return webClient.post()
+                .uri("https://api.example.com/getUserId")
+                .bodyValue(apiARequest)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .map(json -> {
+                    if (!json.isArray() || json.isEmpty()) {
+                        throw new RuntimeException("API A returned empty or invalid response");
+                    }
+
+                    List<UserProfile> profiles = new ArrayList<>();
+
+                    for (JsonNode node : json) {
+                        String id = node.path("userId").asText(null);
+                        String name = node.path("name").asText(null); // assuming name is available
+                        String email = node.path("email").asText(null); // assuming email is available
+                        if (id != null && name != null && email != null) {
+                            profiles.add(new UserProfile(id, name, email));
+                        }
+                    }
+
+                    return Map.of(department, profiles);
+                });
+    }
+}
