@@ -1,109 +1,104 @@
-import React, { Component } from 'react';
-import axios from 'axios';
+package com.example.demo.service;
 
-class UserProfilesByDepartment extends Component {
-  constructor(props) {
-    super(props);
-    this.state = {
-      index: '',
-      company: '',
-      result: null,
-      loading: false
-    };
-  }
+import com.example.demo.model.InputRequest;
+import com.example.demo.model.UserProfile;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
-  handleChange = (field, value) => {
-    this.setState({ [field]: value });
-  };
+import java.util.*;
 
-  fetchData = async () => {
-    const { index, company } = this.state;
-    if (!index || !company) {
-      alert("Both index and company are required.");
-      return;
+@Service
+public class UserService {
+
+    private final WebClient webClient;
+    private final ObjectMapper objectMapper;
+
+    public UserService(WebClient.Builder webClientBuilder, ObjectMapper objectMapper) {
+        this.webClient = webClientBuilder.baseUrl("https://external.api.com").build(); // Change to real API
+        this.objectMapper = objectMapper;
     }
 
-    const requestBody = { index, company };
-
-    this.setState({ loading: true });
-
-    try {
-      const response = await axios.post('/api/users/by-company', requestBody);
-      this.setState({ result: response.data });
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      alert('Failed to fetch data.');
-    } finally {
-      this.setState({ loading: false });
+    // Entry point from controller
+    public Mono<Map<String, Object>> getUsersGroupedByDepartment(InputRequest input) {
+        // Step 1: Get list of departments for the company
+        return fetchDepartments(input.getCompany())
+                .flatMapMany(Flux::fromIterable)
+                .flatMap(department -> fetchUserForDepartment(input.getIndex(), department)
+                        .map(user -> Map.entry(department, user)))
+                .collectList()
+                .map(this::buildFinalResponse);
     }
-  };
 
-  renderDepartmentTable = (department, users) => (
-    <div key={department} style={{ marginBottom: '20px' }}>
-      <h3>{department}</h3>
-      <table border="1" cellPadding="8" cellSpacing="0">
-        <thead>
-          <tr>
-            <th>User ID</th>
-            <th>Name</th>
-            <th>Email</th>
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((u, i) => (
-            <tr key={i}>
-              <td>{u.userId}</td>
-              <td>{u.name}</td>
-              <td>{u.email}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+    // Mock or real GET call to get departments under the company
+    private Mono<List<String>> fetchDepartments(String company) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/departments")
+                        .queryParam("company", company)
+                        .build())
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .map(json -> {
+                    List<String> depts = new ArrayList<>();
+                    if (json.isArray()) {
+                        json.forEach(node -> {
+                            String name = node.asText();
+                            if (!name.isEmpty()) depts.add(name);
+                        });
+                    }
+                    return depts;
+                });
+    }
 
-  render() {
-    const { index, company, result, loading } = this.state;
+    // Fetch one user for a given department
+    private Mono<UserProfile> fetchUserForDepartment(String index, String department) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/external/userByDepartment")
+                        .queryParam("index", index)
+                        .queryParam("department", department)
+                        .build())
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .map(json -> {
+                    if (json.isArray() && !json.isEmpty()) {
+                        JsonNode first = json.get(0); // Pick first user
+                        return new UserProfile(
+                                first.path("userId").asText(),
+                                first.path("name").asText(),
+                                first.path("email").asText(),
+                                department,
+                                first.path("salary").asInt(0)
+                        );
+                    } else {
+                        throw new RuntimeException("No users found for department: " + department);
+                    }
+                });
+    }
 
-    return (
-      <div style={{ padding: '20px', fontFamily: 'Arial' }}>
-        <h2>Company Department Users</h2>
+    // Assemble the final JSON response
+    private Map<String, Object> buildFinalResponse(List<Map.Entry<String, UserProfile>> userList) {
+        Map<String, Object> response = new LinkedHashMap<>();
 
-        {/* Input Section */}
-        <div style={{ marginBottom: '10px' }}>
-          <input
-            type="text"
-            placeholder="Index"
-            value={index}
-            onChange={e => this.handleChange('index', e.target.value)}
-            style={{ marginRight: '10px' }}
-          />
-          <input
-            type="text"
-            placeholder="Company"
-            value={company}
-            onChange={e => this.handleChange('company', e.target.value)}
-          />
-        </div>
+        int totalUsers = userList.size();
+        int totalSalary = userList.stream().mapToInt(e -> e.getValue().getSalary()).sum();
 
-        <button onClick={this.fetchData} disabled={loading}>
-          {loading ? 'Loading...' : 'Fetch Data'}
-        </button>
+        response.put("totalUsers", String.valueOf(totalUsers));
+        response.put("Total salary", String.valueOf(totalSalary));
 
-        {/* Output Section */}
-        {result && (
-          <div style={{ marginTop: '30px' }}>
-            <h3>Total Users: {result.totalUsers}</h3>
-            <h3>Total Salary: {result['Total salary']}</h3>
+        for (Map.Entry<String, UserProfile> entry : userList) {
+            UserProfile u = entry.getValue();
+            response.put(entry.getKey(), List.of(Map.of(
+                    "userId", u.getUserId(),
+                    "name", u.getName(),
+                    "email", u.getEmail()
+            )));
+        }
 
-            {Object.entries(result)
-              .filter(([key]) => key !== 'totalUsers' && key !== 'Total salary')
-              .map(([dept, users]) => this.renderDepartmentTable(dept, users))}
-          </div>
-        )}
-      </div>
-    );
-  }
-}
-
-export default UserProfilesByDepartment;
+        return response;
+    }
+                          }
