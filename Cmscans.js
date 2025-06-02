@@ -1,79 +1,84 @@
-package com.example.demo.service;
-
-import com.example.demo.model.InputRequest;
-import com.example.demo.model.UserProfile;
-import com.fasterxml.jackson.databind.JsonNode;
-import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-
-import java.util.*;
-
 @Service
-public class UserService {
+public class StudentService {
 
     private final WebClient webClient;
 
-    public UserService(WebClient.Builder webClientBuilder) {
+    public StudentService(WebClient.Builder webClientBuilder) {
         this.webClient = webClientBuilder.baseUrl("https://external.api.com").build(); // Replace with actual base URL
     }
 
-    public Mono<Map<String, Object>> getUsersGroupedByDepartment(InputRequest input) {
-        List<String> departments = getDepartmentsForCompany(input.getCompany());
+    public Mono<Map<String, Object>> getStudentsGroupedBySection(InputRequest input) {
+        List<String> sections = getSectionsForSchool(input.getSchool());
 
-        return Flux.fromIterable(departments)
-                .flatMap(department -> fetchUserForDepartment(input.getIndex(), department)
-                        .map(user -> Map.entry(department, user)))
+        return Flux.fromIterable(sections)
+                .flatMap(section -> fetchStudentForSection(input.getIndex(), section)
+                        .map(student -> Map.entry(section, student)))
                 .collectList()
                 .map(this::buildFinalResponse);
     }
 
-    private List<String> getDepartmentsForCompany(String company) {
-        // You can customize this map per company if needed
-        return List.of("Sales", "Marketing", "Engineering", "HR");
+    private List<String> getSectionsForSchool(String school) {
+        return List.of("A", "B", "C", "D");
     }
 
-    private Mono<UserProfile> fetchUserForDepartment(String index, String department) {
+    private Mono<StudentProfile> fetchStudentForSection(String index, String section) {
         return webClient.get()
                 .uri(uriBuilder -> uriBuilder
-                        .path("/external/userByDepartment")
+                        .path("/external/studentBySection")
                         .queryParam("index", index)
-                        .queryParam("department", department)
+                        .queryParam("section", section)
                         .build())
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .map(json -> {
                     if (json.isArray() && !json.isEmpty()) {
                         JsonNode first = json.get(0);
-                        return new UserProfile(
-                                first.path("userId").asText(),
+                        return new StudentProfile(
+                                first.path("studentId").asText(),
                                 first.path("name").asText(),
                                 first.path("email").asText(),
-                                department,
-                                first.path("salary").asInt(0)
+                                section,
+                                first.path("mathMarks").asInt(0),
+                                first.path("scienceMarks").asInt(0),
+                                first.path("evsMarks").asInt(0),
+                                first.path("englishMarks").asInt(0)
                         );
                     } else {
-                        throw new RuntimeException("No users found for department: " + department);
+                        throw new RuntimeException("No students found for section: " + section);
                     }
                 });
     }
 
-    private Map<String, Object> buildFinalResponse(List<Map.Entry<String, UserProfile>> userList) {
+    private Map<String, Object> buildFinalResponse(List<Map.Entry<String, StudentProfile>> studentList) {
         Map<String, Object> response = new LinkedHashMap<>();
 
-        int totalUsers = userList.size();
-        int totalSalary = userList.stream().mapToInt(e -> e.getValue().getSalary()).sum();
+        int totalStudents = studentList.size();
+        int totalMath = 0, totalScience = 0, totalEvs = 0, totalEnglish = 0;
 
-        response.put("totalUsers", String.valueOf(totalUsers));
-        response.put("Total salary", String.valueOf(totalSalary));
+        for (Map.Entry<String, StudentProfile> entry : studentList) {
+            StudentProfile s = entry.getValue();
+            totalMath += s.getMathMarks();
+            totalScience += s.getScienceMarks();
+            totalEvs += s.getEvsMarks();
+            totalEnglish += s.getEnglishMarks();
+        }
 
-        for (Map.Entry<String, UserProfile> entry : userList) {
-            UserProfile u = entry.getValue();
+        response.put("totalStudents", String.valueOf(totalStudents));
+        response.put("Total math marks", String.valueOf(totalMath));
+        response.put("Total science marks", String.valueOf(totalScience));
+        response.put("Total evs marks", String.valueOf(totalEvs));
+        response.put("Total english marks", String.valueOf(totalEnglish));
+
+        for (Map.Entry<String, StudentProfile> entry : studentList) {
+            StudentProfile s = entry.getValue();
             response.put(entry.getKey(), List.of(Map.of(
-                    "userId", u.getUserId(),
-                    "name", u.getName(),
-                    "email", u.getEmail()
+                    "studentId", s.getStudentId(),
+                    "name", s.getName(),
+                    "email", s.getEmail(),
+                    "mathMarks", s.getMathMarks(),
+                    "scienceMarks", s.getScienceMarks(),
+                    "evsMarks", s.getEvsMarks(),
+                    "englishMarks", s.getEnglishMarks()
             )));
         }
 
