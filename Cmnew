@@ -1,0 +1,80 @@
+package com.example.demo.service;
+
+import com.example.demo.model.InputRequest;
+import com.example.demo.model.UserProfile;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
+
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Service
+public class UserService {
+
+    private final WebClient webClient;
+    private final ObjectMapper objectMapper;
+
+    public UserService(WebClient.Builder webClientBuilder, ObjectMapper objectMapper) {
+        this.webClient = webClientBuilder.baseUrl("https://external.api.com").build(); // Change as needed
+        this.objectMapper = objectMapper;
+    }
+
+    public Mono<Map<String, Object>> getUsersGroupedByDepartment(InputRequest input) {
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/external/users")
+                        .queryParam("index", input.getIndex())
+                        .queryParam("company", input.getCompany())
+                        .build())
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .map(this::parseResponseOneUserPerDept);
+    }
+
+    private Map<String, Object> parseResponseOneUserPerDept(JsonNode root) {
+        List<UserProfile> allUsers = new ArrayList<>();
+
+        if (root.isArray()) {
+            for (JsonNode node : root) {
+                String userId = node.path("userId").asText();
+                String name = node.path("name").asText();
+                String email = node.path("email").asText();
+                String dept = node.path("department").asText();
+                int salary = node.path("salary").asInt();
+
+                if (!userId.isEmpty() && !name.isEmpty() && !email.isEmpty() && !dept.isEmpty()) {
+                    allUsers.add(new UserProfile(userId, name, email, dept, salary));
+                }
+            }
+        }
+
+        // Group by department and pick only the first user in each group
+        Map<String, UserProfile> onePerDepartment = allUsers.stream()
+                .collect(Collectors.toMap(
+                        UserProfile::getDepartment,
+                        user -> user,
+                        (existing, replacement) -> existing // keep the first
+                ));
+
+        int totalUsers = onePerDepartment.size();
+        int totalSalary = onePerDepartment.values().stream().mapToInt(UserProfile::getSalary).sum();
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("totalUsers", String.valueOf(totalUsers));
+        response.put("Total salary", String.valueOf(totalSalary));
+
+        for (Map.Entry<String, UserProfile> entry : onePerDepartment.entrySet()) {
+            UserProfile u = entry.getValue();
+            response.put(entry.getKey(), List.of(Map.of(
+                    "userId", u.getUserId(),
+                    "name", u.getName(),
+                    "email", u.getEmail()
+            )));
+        }
+
+        return response;
+    }
+}
